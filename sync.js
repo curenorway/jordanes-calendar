@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { Webflow } = require('webflow-api');
+const Webflow = require('webflow-api'); // Import without destructuring
 const cron = require('cron');
 require('dotenv').config();
 
