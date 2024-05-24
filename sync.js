@@ -6,8 +6,6 @@ const webflowApiKey = process.env.WEBFLOW_API_KEY;
 const collectionId = process.env.COLLECTION_ID;
 
 console.log('Starting Webflow CMS sync script...');
-console.log('WEBFLOW_API_KEY:', webflowApiKey);
-console.log('COLLECTION_ID:', collectionId);
 
 // Function to get the current timestamp in milliseconds
 function getCurrentTimestamp() {
@@ -19,17 +17,11 @@ async function fetchOsloBorsData() {
   const currentTimestamp = getCurrentTimestamp();
   const osloBorsEndpoint = `https://ir.oms.no/server/secure/components?auth=key%3dJORDA&product=financialCalendar&start=${currentTimestamp}`;
 
-  console.log('Fetching Oslo Børs data from:', osloBorsEndpoint);
-
   try {
     const response = await fetch(osloBorsEndpoint);
     const data = await response.json();
-    console.log('Oslo Børs response:', data); // Log the entire response
-    if (!data || !data.rows) {
-      console.log('No data.rows found in Oslo Børs response');
-      return [];
-    }
-    return data.rows;
+    console.log('Fetched Oslo Børs data');
+    return data.rows || [];
   } catch (error) {
     console.error('Error fetching Oslo Børs data:', error);
     return [];
@@ -38,7 +30,7 @@ async function fetchOsloBorsData() {
 
 // Function to get existing items in Webflow CMS collection
 async function getWebflowItems() {
-  const url = `https://api.webflow.com/v2/collections/${collectionId}/items`;
+  const url = `https://api.webflow.com/v2/collections/${collectionId}/items?limit=100`;
   const options = {
     method: 'GET',
     headers: {
@@ -47,17 +39,12 @@ async function getWebflowItems() {
     }
   };
 
-  console.log('Fetching Webflow items from URL:', url);
-
   try {
     const response = await fetch(url, options);
     const data = await response.json();
-    console.log('Webflow response:', data); // Log the entire response
-    if (!data || !data.items) {
-      console.log('No items found in Webflow response');
-      return [];
-    }
-    return data.items;
+    console.log(`Fetched ${data.items.length} items from Webflow`);
+    console.log('Full Webflow response:', JSON.stringify(data, null, 2)); // Log the entire response
+    return data.items || [];
   } catch (error) {
     console.error('Error fetching Webflow items:', error);
     return [];
@@ -66,9 +53,7 @@ async function getWebflowItems() {
 
 // Function to create a slug
 function createSlug(text) {
-  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-  console.log('Creating slug:', text, '->', slug);
-  return slug;
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
 }
 
 // Function to format date to ISO 8601
@@ -81,58 +66,112 @@ function formatDate(dateString) {
 }
 
 // Function to update Webflow CMS collection
-async function updateWebflowCollection(data) {
+async function updateWebflowCollection(data, isDraft = true, isPublished = false) {
   const existingItems = await getWebflowItems();
-  if (!existingItems) {
-    console.error('Failed to fetch existing Webflow items.');
-    return;
-  }
-  console.log('Existing Webflow items:', existingItems);
+  const existingItemsMap = new Map();
+  existingItems.forEach(item => {
+    if (item.fieldData && item.fieldData.key) {
+      const key = item.fieldData.key.toLowerCase();
+      existingItemsMap.set(key, item);
+      console.log(`Stored existing item key: ${key}`); // Log each key being stored
+    } else {
+      console.log('Item missing key field:', item); // Log any items missing the key field
+    }
+  });
 
-  for (const row of data) {
-    console.log('Processing row:', row);
+  console.log('Existing Webflow item keys:', Array.from(existingItemsMap.keys())); // Log all stored keys
 
-    const existingItem = existingItems.find(item => item.fields.key === row.key);
+  const itemsToUpdate = [];
+  const itemsToCreate = [];
+
+  data.forEach(row => {
+    const key = row.key.toLowerCase(); // Convert incoming keys to lowercase for case-insensitive comparison
+    const existingItem = existingItemsMap.get(key);
+    console.log(`Processing Oslo Børs item key: ${key}`); // Log the key being processed
+
     const name = `${row.values.CALENDAR_EVENT_HEADING} - ${row.values.CALENDAR_EVENT_DATE}`;
     const slug = createSlug(name);
     const formattedDate = formatDate(row.values.CALENDAR_EVENT_DATE);
 
     const itemData = {
-      fields: {
-        'key': row.key,
-        'ticker': row.values.TICKER,
-        'sector': row.values.OSE_ITEM_SECTOR,
-        'event_url': row.values.CALENDAR_EVENT_URL,
-        'event_date': formattedDate,
-        'event_heading': row.values.CALENDAR_EVENT_HEADING,
-        'name': name,
-        'slug': slug
-      }
+      'key': row.key,
+      'ticker': row.values.TICKER,
+      'sector': row.values.OSE_ITEM_SECTOR,
+      'event-url': row.values.CALENDAR_EVENT_URL,
+      'event-date': formattedDate,
+      'event-heading': row.values.CALENDAR_EVENT_HEADING,
+      'name': name,
+      'slug': slug
     };
 
-    console.log('Item data to be sent:', itemData);
+    if (existingItem) {
+      console.log(`Match found for key: ${key}, updating item.`);
+      itemsToUpdate.push({ existingItem, itemData });
+    } else {
+      console.log(`No match for key: ${key}, creating new item.`);
+      itemsToCreate.push(itemData);
+    }
+  });
 
-    const url = existingItem
-      ? `https://api.webflow.com/v2/collections/${collectionId}/items/${existingItem._id}`
-      : `https://api.webflow.com/v2/collections/${collectionId}/items`;
+  console.log(`Items to update: ${itemsToUpdate.length}, Items to create: ${itemsToCreate.length}`);
 
+  for (const { existingItem, itemData } of itemsToUpdate) {
+    const url = `https://api.webflow.com/v2/collections/${collectionId}/items/${existingItem._id}`;
     const options = {
-      method: existingItem ? 'PUT' : 'POST',
+      method: 'PATCH',
       headers: {
         accept: 'application/json',
         authorization: `Bearer ${webflowApiKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ fieldData: itemData.fields })
+      body: JSON.stringify({
+        fieldData: itemData, // Correct field name
+        isDraft: isDraft,
+        isArchived: false,
+        isPublished: isPublished
+      })
     };
 
     try {
-      console.log(`Sending ${existingItem ? 'update' : 'create'} request for item:`, itemData);
       const response = await fetch(url, options);
       const result = await response.json();
-      console.log(`Item ${existingItem ? 'updated' : 'created'} successfully:`, result);
+      if (result.message) {
+        console.error(`Error updating item: ${result.message}`);
+      } else {
+        console.log(`Item updated successfully: ${itemData.key}`);
+      }
     } catch (error) {
-      console.error(`Error ${existingItem ? 'updating' : 'creating'} item:`, error);
+      console.error('Error updating item:', error);
+    }
+  }
+
+  for (const itemData of itemsToCreate) {
+    const url = `https://api.webflow.com/v2/collections/${collectionId}/items`;
+    const options = {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${webflowApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        fieldData: itemData, // Correct field name
+        isDraft: isDraft,
+        isArchived: false,
+        isPublished: isPublished
+      })
+    };
+
+    try {
+      const response = await fetch(url, options);
+      const result = await response.json();
+      if (result.message) {
+        console.error(`Error creating item: ${result.message}`);
+      } else {
+        console.log(`Item created successfully: ${itemData.key}`);
+      }
+    } catch (error) {
+      console.error('Error creating item:', error);
     }
   }
 }
@@ -141,8 +180,8 @@ async function updateWebflowCollection(data) {
 async function syncData() {
   console.log('Starting data sync...');
   const data = await fetchOsloBorsData();
-  if (data && data.length > 0) {
-    console.log('Data fetched from Oslo Børs:', data);
+  if (data.length > 0) {
+    console.log(`Fetched ${data.length} items from Oslo Børs`);
     await updateWebflowCollection(data);
   } else {
     console.log('No data fetched from Oslo Børs.');
