@@ -15,7 +15,7 @@ function getCurrentTimestamp() {
 // Function to fetch data from Oslo Børs
 async function fetchOsloBorsData() {
   const currentTimestamp = getCurrentTimestamp();
-  const osloBorsEndpoint = `https://ir.oms.no/server/secure/components?auth=key%3dJORDA&product=financialCalendar&start=${currentTimestamp}`;
+  const osloBorsEndpoint = `https://ir.oms.no/server/secure/components?auth=key%3dJORDA&product=financialCalendar&start=${currentTimestamp}&lang=en`;
 
   try {
     const response = await fetch(osloBorsEndpoint);
